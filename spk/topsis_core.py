@@ -2,8 +2,7 @@
 import pandas as pd
 import numpy as np
 
-# Definisi Bobot (Wj) dan Jenis Kriteria (Cost/Benefit)
-# Di dunia nyata, bobot ini diperoleh dari AHP atau pakar
+
 WEIGHTS = np.array([0.35, 0.30, 0.15, 0.20]) # W1, W2, W3, W4 (Total = 1.0)
 CRITERIA_TYPE = np.array(['benefit', 'benefit', 'cost', 'cost']) # C1, C2, C3, C4
 

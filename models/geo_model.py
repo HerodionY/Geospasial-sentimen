@@ -1,61 +1,93 @@
 # models/geo_model.py
-import osmnx as ox
-import pandas as pd
+import joblib
 import numpy as np
-from geopy.distance import geodesic
-from sklearn.cluster import KMeans
+import geopandas as gpd
+from shapely.geometry import Point
+import os
 
-# Simulasi data historis kepadatan (untuk training model)
-# Fitur: [Kepadatan Penduduk, Kepadatan Fasilitas Publik, Jarak ke Jalan Utama]
-HISTORICAL_DATA = np.array([
-    [500, 10, 50], [450, 8, 60], [100, 2, 500],
-    [900, 15, 20], [850, 12, 30], [200, 3, 400]
-])
 
-# Latih K-Means (misalnya 2 klaster: High Potential dan Low Potential)
-KMEANS_MODEL = KMeans(n_clusters=2, random_state=42, n_init=10).fit(HISTORICAL_DATA)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ROOT_DIR = os.path.dirname(BASE_DIR) 
 
-def get_osm_features(lat, lon, competitor_tags, support_tags, radius=500):
-    """
-    Mengambil dan menghitung fitur Geo-spasial dari OSM.
-    """
-    try:
-        # Mengambil POI dalam radius
-        poi_competitor = ox.features.features_from_point((lat, lon), tags=competitor_tags, dist=radius)
-        poi_support = ox.features.features_from_point((lat, lon), tags=support_tags, dist=radius)
 
-        competitor_count = len(poi_competitor)
-        support_count = len(poi_support)
+MODEL_PATH = os.path.join(ROOT_DIR, "local_kmeans_model.pkl")
+SCALER_PATH = os.path.join(ROOT_DIR, "local_scaler.pkl")
+LABELS_PATH = os.path.join(ROOT_DIR, "cluster_labels.pkl")
+GEOJSON_FILE = os.path.join(ROOT_DIR, "hotosm_idn_points_of_interest_points_geojson\hotosm_idn_points_of_interest_points_geojson.geojson")
+
+class GeoPredictor:
+    def __init__(self):
+        print("--- Loading Geo Model Resources ---")
+        try:
+            self.model = joblib.load(MODEL_PATH)
+            self.scaler = joblib.load(SCALER_PATH)
+            self.labels_map = joblib.load(LABELS_PATH)
+            
+            
+            print("Loading GeoJSON data for feature extraction... (Wait a moment)")
+            self.gdf = gpd.read_file(GEOJSON_FILE)
+            self.gdf = self.gdf.to_crs(epsg=3857) # Ubah ke Meter
+            print("Geo Model Ready!")
+            
+        except FileNotFoundError:
+            print("ERROR: Model .pkl tidak ditemukan! Harap jalankan training dulu.")
+            self.model = None
+
+    def _get_features(self, lat, lon, radius=500):
+        """Menghitung jumlah competitor & support di sekitar lat/lon"""
+        # Buat Point dan ubah ke Meter (EPSG:3857)
+        pt_geo = gpd.GeoSeries([Point(lon, lat)], crs="EPSG:4326").to_crs(epsg=3857)
+        point_meter = pt_geo[0]
         
-        # Simulasi Jarak ke Pusat Kota (Gunakan Geopy Distance)
-        pusat_kota_coord = (-6.175, 106.828) # Contoh koordinat Jakarta Pusat
-        current_coord = (lat, lon)
-        distance_to_center = geodesic(current_coord, pusat_kota_coord).km 
+        # Buffer Circle
+        buffer = point_meter.buffer(radius)
+        neighbors = self.gdf[self.gdf.geometry.intersects(buffer)]
         
-        return competitor_count, support_count, distance_to_center
+        if neighbors.empty:
+            return 0, 0
+            
+        valid_neighbors = neighbors[neighbors['amenity'].notna()]
+        
+        
+        COMPETITOR_TAGS = ["restaurant", "cafe", "fast_food"]
+        SUPPORT_TAGS = ["bank", "school", "university", "office", "marketplace", "bus_station"]
+        
+        comp = valid_neighbors[valid_neighbors['amenity'].isin(COMPETITOR_TAGS)].shape[0]
+        supp = valid_neighbors[valid_neighbors['amenity'].isin(SUPPORT_TAGS)].shape[0]
+        
+        return comp, supp
 
-    except Exception as e:
-        print(f"Error OSMnx/Geopy: {e}")
-        return 0, 0, 1000 # Nilai default buruk jika gagal
+    def predict_score(self, lat, lon):
+        """
+        Input: Lat, Lon
+        Output: Score (0.0 - 1.0) untuk keperluan TOPSIS
+        """
+        if self.model is None:
+            return 0.1 # Default bad score jika model error
+            
+        # 1. Hitung fitur realtime
+        comp, supp = self._get_features(lat, lon)
+        
+        # 2. Prediksi Cluster
+        features = np.array([[comp, supp]])
+        features_scaled = self.scaler.transform(features)
+        cluster_id = self.model.predict(features_scaled)[0]
+        
+        # 3. Mapping Cluster ke Skor
+        # Kita ambil label text dari labels_map, misal: "High Potential (Strategis)"
+        label_text = self.labels_map.get(cluster_id, "").lower()
+        
+        # Logika Konversi Cluster ID ke Skor Angka (Untuk TOPSIS)
+        # Anda bisa sesuaikan ini berdasarkan hasil print training Anda mana cluster yg bagus
+        if "high" in label_text:
+            base_score = 0.9  # Sangat Bagus
+        elif "medium" in label_text:
+            base_score = 0.6  # Lumayan
+        else: # Low / Sepi
+            base_score = 0.3  # Kurang
+            
+        # Sedikit variasi berdasarkan jumlah support (agar tidak flat)
+        final_score = base_score + (supp * 0.001) 
+        
+        return round(min(final_score, 1.0), 3)
 
-def run_geo_analysis(lat, lon):
-    # Definisi Tags OSM (Sesuaikan dengan ritel Anda!)
-    # Contoh: Jika ritel Anda adalah kafe/restoran:
-    COMPETITOR_TAGS = {"amenity": "restaurant"}
-    SUPPORT_TAGS = {"amenity": ["school", "university", "office"]}
-    
-    comp_count, supp_count, dist_center = get_osm_features(lat, lon, COMPETITOR_TAGS, SUPPORT_TAGS)
-    
-    current_features = np.array([[comp_count, supp_count, dist_center]])
-    cluster = KMEANS_MODEL.predict(current_features)[0]
-    
-    if cluster == 2:
-        c1_score = 0.9  # High Potential
-    elif cluster == 1:
-        c1_score = 0.65  # Low Potential
-    else:
-        c1_score = 0.40  # Netral
-
-    c1_score += np.random.rand() * 0.05
-    
-    return round(c1_score, 3)
