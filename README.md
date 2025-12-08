@@ -132,7 +132,6 @@ Server akan merespons dengan status `200 OK` dan *ranking* akhir:
             "Vi": 0.65,
             "Ranking": 1
         },
-        // ... (Lokasi lainnya) ...
     ]
 }
 ```
@@ -152,3 +151,4 @@ TopsisSPPK/
 ├── spk_venv/                # Virtual Environment
 └── README.md                # Dokumentasi Proyek ini
 ```
+
