@@ -76,8 +76,10 @@ from flask import Flask, request, jsonify
 import pandas as pd
 from models.sawGeoModel import GeoTOPSISPredictor
 from models.sentiment_model import run_sentiment_analysis
+from flask_cors import CORS
 
 app = Flask(__name__)
+CORS(app)
 
 # --- KAMUS TAGS (SAMA SEPERTI SEBELUMNYA) ---
 BUSINESS_CONFIG = {
@@ -152,7 +154,7 @@ def recommend_location():
                 config['support']     
             )
             
-            # Ambil data dari dictionary hasil engine
+            
             geo_score = geo_result['score']
             
             sent_score = run_sentiment_analysis(loc_data.get('reviews', []))
@@ -161,10 +163,10 @@ def recommend_location():
             norm_sewa = 100 / (sewa if sewa > 0 else 1)
             if norm_sewa > 1: norm_sewa = 1
             
-            # Hitung Final VI
+            
             final_vi = (geo_score * 0.6) + (sent_score * 0.3) + (norm_sewa * 0.1)
             
-            # GENERATE ALASAN (Bahasa Manusia)
+            
             explanation_list = generate_explanation(geo_result, sewa, sent_score)
             
             results.append({
